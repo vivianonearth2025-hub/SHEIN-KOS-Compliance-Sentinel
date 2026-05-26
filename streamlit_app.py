@@ -173,7 +173,7 @@ with tab2:
 with tab3:
     st.header("About This Project")
     st.markdown("**SHEIN KOS Compliance Sentinel** is an AI-powered compliance risk screening system for SHEIN's cross-border influencer marketing.")
-    st.markdown("Built as a capstone project for **HKUST ISOM5240 — Deep Learning Business Applications with Python** (Spring 2026) by Jasper (Jiayi) Li and Vivian.")
+    st.markdown("Built as a capstone project for **HKUST ISOM5240 — Deep Learning Business Applications with Python** (Spring 2026) by Jasper (Jiayi) Li and Vivian (Wei) Wu.")
     
     st.markdown("---")
     st.subheader("🏗️ System Architecture")

@@ -213,4 +213,4 @@ with tab3:
     st.markdown(f"- Pipeline B: [{PIPELINE_B_MODEL}](https://huggingface.co/{PIPELINE_B_MODEL})")
     
     st.markdown("---")
-    st.caption("Authors: Jasper (Jiayi) Li, Vivian. Disclaimer: Academic prototype — outputs are advisory only.")
+    st.caption("Authors: Jasper (Jiayi) Li, Vivian (Wei) Wu. Disclaimer: Academic prototype — outputs are advisory only.")

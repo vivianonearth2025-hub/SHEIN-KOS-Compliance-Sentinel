@@ -9,7 +9,7 @@ import os
 # CONFIG
 # ============================================================
 PIPELINE_A_MODEL = "Vivianonearth666/SHEIN_compliance_text_v2"
-PIPELINE_C_MODEL = "Vivianonearth666/shein_compliance_ATT_sentiment"
+PIPELINE_C_MODEL = "JLi09/shein_compliance_ATT_Sentiment"
 PIPELINE_B_MODEL = "openai/whisper-small"
 
 HF_TOKEN = st.secrets.get("HF_TOKEN", "")

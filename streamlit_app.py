@@ -1,5 +1,9 @@
 import streamlit as st
-from huggingface_hub import InferenceClient
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
+import torch
+import numpy as np
+import tempfile
+import os
 
 # ============================================================
 # CONFIG
@@ -20,17 +24,31 @@ st.set_page_config(
 )
 
 # ============================================================
-# HF INFERENCE CLIENT (cached so it doesn't re-init on every action)
+# MODEL LOADERS (cached after first load)
 # ============================================================
-@st.cache_resource
-def get_hf_client():
-    return InferenceClient(provider="hf-inference", token=HF_TOKEN)
+@st.cache_resource(show_spinner=False)
+def load_pipeline_a():
+    model = AutoModelForSequenceClassification.from_pretrained(PIPELINE_A_MODEL, token=HF_TOKEN)
+    tokenizer = AutoTokenizer.from_pretrained(PIPELINE_A_MODEL, token=HF_TOKEN)
+    model.eval()
+    return model, tokenizer
+
+@st.cache_resource(show_spinner=False)
+def load_pipeline_b():
+    return pipeline("automatic-speech-recognition", model=PIPELINE_B_MODEL, token=HF_TOKEN)
+
+@st.cache_resource(show_spinner=False)
+def load_pipeline_c():
+    model = AutoModelForSequenceClassification.from_pretrained(PIPELINE_C_MODEL, token=HF_TOKEN)
+    tokenizer = AutoTokenizer.from_pretrained(PIPELINE_C_MODEL, token=HF_TOKEN)
+    model.eval()
+    return model, tokenizer
+
 
 # ============================================================
 # HELPERS
 # ============================================================
 def preprocess_twitter(text):
-    """cardiffnlp models need @user and http placeholders"""
     new_text = []
     for t in str(text).split(" "):
         t = '@user' if t.startswith('@') and len(t) > 1 else t
@@ -39,42 +57,19 @@ def preprocess_twitter(text):
     return " ".join(new_text)
 
 
-def classify_text(text, model_id):
-    """Call HF Inference for text classification"""
-    client = get_hf_client()
-    return client.text_classification(text, model=model_id)
-
-
-def transcribe_audio(audio_bytes, model_id):
-    """Call HF Inference for Whisper ASR"""
-    client = get_hf_client()
-    return client.automatic_speech_recognition(audio_bytes, model=model_id)
-
-
-def parse_classification(result):
-    """Convert InferenceClient text_classification output to (label, score, all_scores)
-    Modern API returns list of objects with .label and .score attributes
-    """
-    # robust to both attribute-style and dict-style responses
-    scores = []
-    for item in result:
-        label = getattr(item, 'label', None) if not isinstance(item, dict) else item.get('label')
-        score = getattr(item, 'score', None) if not isinstance(item, dict) else item.get('score')
-        scores.append((label, float(score)))
-    
-    scores.sort(key=lambda x: -x[1])
-    all_scores = dict(scores)
-    top_label, top_score = scores[0]
-    return top_label, top_score, all_scores
-
-
-def get_transcript(result):
-    """Extract text from ASR result"""
-    if hasattr(result, 'text'):
-        return result.text
-    if isinstance(result, dict):
-        return result.get('text', '')
-    return str(result)
+def predict_compliance(text, model, tokenizer, use_twitter_preprocessing=True):
+    """returns (label, confidence, all_scores_dict)"""
+    processed = preprocess_twitter(text) if use_twitter_preprocessing else text
+    inputs = tokenizer(processed, padding=True, truncation=True, max_length=128, return_tensors='pt')
+    with torch.no_grad():
+        outputs = model(**inputs)
+    probs = torch.nn.functional.softmax(outputs.logits, dim=-1)[0].numpy()
+    pred_id = int(np.argmax(probs))
+    return (
+        model.config.id2label[pred_id],
+        float(probs[pred_id]),
+        {model.config.id2label[i]: float(probs[i]) for i in range(len(probs))}
+    )
 
 
 ACTION_MAP = {
@@ -104,13 +99,13 @@ def display_result(pred_label, confidence, all_scores):
 
 
 # ============================================================
-# HEADER + TOKEN CHECK
+# HEADER
 # ============================================================
 st.title("🛡️ SHEIN KOS Compliance Sentinel")
 st.markdown("AI-powered compliance screening for cross-border influencer marketing. Detects FTC, ASA, and FDA-style violations in written posts and live-stream audio.")
 
 if not HF_TOKEN:
-    st.error("⚠️ HF_TOKEN secret not configured. Go to Streamlit Cloud → app Settings → Secrets and add HF_TOKEN = \"hf_xxx\"")
+    st.error("⚠️ HF_TOKEN secret not configured.")
     st.stop()
 
 # ============================================================
@@ -118,7 +113,7 @@ if not HF_TOKEN:
 # ============================================================
 tab1, tab2, tab3 = st.tabs(["📝 Pre-Screening", "🎤 Live Monitoring", "ℹ️ About"])
 
-# ---------- Tab 1: Pipeline A ----------
+# ---------- Tab 1 ----------
 with tab1:
     st.header("Pre-Screen Influencer Post")
     st.markdown("Paste a written SHEIN influencer post to classify for FTC disclosure, unsubstantiated claims, or greenwashing violations.")
@@ -129,20 +124,17 @@ with tab1:
         if not text_input.strip():
             st.warning("Please paste some text to analyze.")
         else:
-            with st.spinner("Analyzing… (first call may take ~20s for model warm-up)"):
-                try:
-                    processed = preprocess_twitter(text_input)
-                    api_result = classify_text(processed, PIPELINE_A_MODEL)
-                    pred_label, confidence, all_scores = parse_classification(api_result)
-                    st.markdown("---")
-                    display_result(pred_label, confidence, all_scores)
-                except Exception as e:
-                    st.error(f"Error: {e}")
+            with st.spinner("Loading model (first time may take 1-2 min)…"):
+                model, tokenizer = load_pipeline_a()
+            with st.spinner("Analyzing..."):
+                pred_label, confidence, all_scores = predict_compliance(text_input, model, tokenizer)
+            st.markdown("---")
+            display_result(pred_label, confidence, all_scores)
 
-# ---------- Tab 2: Pipeline B + C ----------
+# ---------- Tab 2 ----------
 with tab2:
     st.header("Monitor Live Stream Audio")
-    st.markdown("Upload an audio clip from a SHEIN live haul. The system transcribes the speech (Whisper-small) and classifies the transcript for compliance violations.")
+    st.markdown("Upload an audio clip from a SHEIN live haul. Whisper-small transcribes the speech, then Pipeline C (fine-tuned on spoken-style data) classifies the transcript.")
     
     audio_file = st.file_uploader("Choose audio file (MP3, WAV, M4A):", type=['mp3', 'wav', 'm4a', 'ogg'])
     
@@ -150,25 +142,32 @@ with tab2:
         st.audio(audio_file)
         
         if st.button("🎤 Transcribe & Analyze", type="primary", key="analyze_audio"):
+            suffix = os.path.splitext(audio_file.name)[1] or '.mp3'
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(audio_file.getbuffer())
+                tmp_path = tmp.name
+            
             try:
-                audio_bytes = audio_file.read()
-                
-                with st.spinner("🎙️ Transcribing audio with Whisper… (first call may take ~30s)"):
-                    asr_result = transcribe_audio(audio_bytes, PIPELINE_B_MODEL)
-                    transcript = get_transcript(asr_result).strip()
+                with st.spinner("Loading Whisper (first time may take 2-3 min)…"):
+                    whisper_pipe = load_pipeline_b()
+                with st.spinner("🎙️ Transcribing audio…"):
+                    transcript = whisper_pipe(tmp_path)['text'].strip()
                 
                 st.markdown("### 📝 Whisper Transcription")
                 st.info(transcript if transcript else "(no speech detected)")
                 
                 if transcript:
-                    with st.spinner("🎯 Classifying compliance (Pipeline C)…"):
-                        api_result = classify_text(transcript, PIPELINE_C_MODEL)
-                        pred_label, confidence, all_scores = parse_classification(api_result)
-                    
+                    with st.spinner("Loading Pipeline C…"):
+                        model_c, tokenizer_c = load_pipeline_c()
+                    with st.spinner("🎯 Classifying compliance…"):
+                        pred_label, confidence, all_scores = predict_compliance(
+                            transcript, model_c, tokenizer_c, use_twitter_preprocessing=False
+                        )
                     st.markdown("### 🎯 Pipeline C Classification")
                     display_result(pred_label, confidence, all_scores)
-            except Exception as e:
-                st.error(f"Error: {e}")
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
 
 # ---------- Tab 3: About ----------
 with tab3:
@@ -181,7 +180,6 @@ with tab3:
     st.markdown("- **Pipeline A** — Written post classifier, fine-tuned `cardiffnlp/twitter-roberta-base-2022-154m`")
     st.markdown("- **Pipeline B** — Speech-to-text, `openai/whisper-small`")
     st.markdown("- **Pipeline C** — Spoken transcript classifier, fine-tuned `distilbert-base-uncased`")
-    st.markdown("Models are invoked via Hugging Face Inference API to keep the Streamlit Cloud footprint minimal.")
     
     st.markdown("---")
     st.subheader("📊 Pipeline A Final Performance (V2)")

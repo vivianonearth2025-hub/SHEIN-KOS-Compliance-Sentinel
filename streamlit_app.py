@@ -1,15 +1,13 @@
 import streamlit as st
-import requests
-import time
+from huggingface_hub import InferenceClient
 
 # ============================================================
-# CONFIG 
+# CONFIG
 # ============================================================
-PIPELINE_A_MODEL = "Vivianonearth666/SHEIN_compliance_text_v2"          
-PIPELINE_C_MODEL = "Vivianonearth666/shein_compliance_ATT_sentiment"   
+PIPELINE_A_MODEL = "Vivianonearth666/SHEIN_compliance_text_v2"
+PIPELINE_C_MODEL = "Vivianonearth666/shein_compliance_ATT_sentiment"
 PIPELINE_B_MODEL = "openai/whisper-small"
 
-# HF token from Streamlit Cloud secrets
 HF_TOKEN = st.secrets.get("HF_TOKEN", "")
 
 # ============================================================
@@ -22,7 +20,14 @@ st.set_page_config(
 )
 
 # ============================================================
-# HF INFERENCE API HELPERS
+# HF INFERENCE CLIENT (cached so it doesn't re-init on every action)
+# ============================================================
+@st.cache_resource
+def get_hf_client():
+    return InferenceClient(provider="hf-inference", token=HF_TOKEN)
+
+# ============================================================
+# HELPERS
 # ============================================================
 def preprocess_twitter(text):
     """cardiffnlp models need @user and http placeholders"""
@@ -34,52 +39,42 @@ def preprocess_twitter(text):
     return " ".join(new_text)
 
 
-def call_hf_text(text, model_id, max_retries=3):
-    """Call HF Inference API for text classification with cold-start retry"""
-    url = f"https://api-inference.huggingface.co/models/{model_id}"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    
-    for attempt in range(max_retries):
-        r = requests.post(url, headers=headers, json={"inputs": text})
-        
-        if r.status_code == 503:
-            wait = r.json().get('estimated_time', 20)
-            st.info(f"Model warming up (try {attempt+1}/{max_retries})… ~{wait:.0f}s")
-            time.sleep(wait)
-            continue
-        
-        r.raise_for_status()
-        return r.json()
-    
-    raise RuntimeError(f"Model {model_id} still loading after {max_retries} retries")
+def classify_text(text, model_id):
+    """Call HF Inference for text classification"""
+    client = get_hf_client()
+    return client.text_classification(text, model=model_id)
 
 
-def call_hf_audio(audio_bytes, model_id, max_retries=3):
-    """Call HF Inference API for Whisper ASR"""
-    url = f"https://api-inference.huggingface.co/models/{model_id}"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    
-    for attempt in range(max_retries):
-        r = requests.post(url, headers=headers, data=audio_bytes)
-        
-        if r.status_code == 503:
-            wait = r.json().get('estimated_time', 30)
-            st.info(f"Whisper warming up (try {attempt+1}/{max_retries})… ~{wait:.0f}s")
-            time.sleep(wait)
-            continue
-        
-        r.raise_for_status()
-        return r.json()
-    
-    raise RuntimeError(f"Whisper still loading after {max_retries} retries")
+def transcribe_audio(audio_bytes, model_id):
+    """Call HF Inference for Whisper ASR"""
+    client = get_hf_client()
+    return client.automatic_speech_recognition(audio_bytes, model=model_id)
 
 
-def parse_classification(api_response):
-    """HF API returns [[{label, score}, ...]] sorted by score desc"""
-    scores_list = api_response[0] if isinstance(api_response[0], list) else api_response
-    all_scores = {item['label']: item['score'] for item in scores_list}
-    top = max(scores_list, key=lambda x: x['score'])
-    return top['label'], top['score'], all_scores
+def parse_classification(result):
+    """Convert InferenceClient text_classification output to (label, score, all_scores)
+    Modern API returns list of objects with .label and .score attributes
+    """
+    # robust to both attribute-style and dict-style responses
+    scores = []
+    for item in result:
+        label = getattr(item, 'label', None) if not isinstance(item, dict) else item.get('label')
+        score = getattr(item, 'score', None) if not isinstance(item, dict) else item.get('score')
+        scores.append((label, float(score)))
+    
+    scores.sort(key=lambda x: -x[1])
+    all_scores = dict(scores)
+    top_label, top_score = scores[0]
+    return top_label, top_score, all_scores
+
+
+def get_transcript(result):
+    """Extract text from ASR result"""
+    if hasattr(result, 'text'):
+        return result.text
+    if isinstance(result, dict):
+        return result.get('text', '')
+    return str(result)
 
 
 ACTION_MAP = {
@@ -134,10 +129,10 @@ with tab1:
         if not text_input.strip():
             st.warning("Please paste some text to analyze.")
         else:
-            with st.spinner("Analyzing..."):
+            with st.spinner("Analyzing… (first call may take ~20s for model warm-up)"):
                 try:
-                    processed = preprocess_twitter(text_input)   # cardiffnlp preprocessing
-                    api_result = call_hf_text(processed, PIPELINE_A_MODEL)
+                    processed = preprocess_twitter(text_input)
+                    api_result = classify_text(processed, PIPELINE_A_MODEL)
                     pred_label, confidence, all_scores = parse_classification(api_result)
                     st.markdown("---")
                     display_result(pred_label, confidence, all_scores)
@@ -158,17 +153,16 @@ with tab2:
             try:
                 audio_bytes = audio_file.read()
                 
-                with st.spinner("🎙️ Transcribing audio with Whisper..."):
-                    asr_result = call_hf_audio(audio_bytes, PIPELINE_B_MODEL)
-                    transcript = asr_result.get('text', '').strip()
+                with st.spinner("🎙️ Transcribing audio with Whisper… (first call may take ~30s)"):
+                    asr_result = transcribe_audio(audio_bytes, PIPELINE_B_MODEL)
+                    transcript = get_transcript(asr_result).strip()
                 
                 st.markdown("### 📝 Whisper Transcription")
                 st.info(transcript if transcript else "(no speech detected)")
                 
                 if transcript:
-                    with st.spinner("🎯 Classifying compliance (Pipeline C)..."):
-                        # distilbert — no Twitter preprocessing
-                        api_result = call_hf_text(transcript, PIPELINE_C_MODEL)
+                    with st.spinner("🎯 Classifying compliance (Pipeline C)…"):
+                        api_result = classify_text(transcript, PIPELINE_C_MODEL)
                         pred_label, confidence, all_scores = parse_classification(api_result)
                     
                     st.markdown("### 🎯 Pipeline C Classification")

@@ -1,2 +1,5 @@
 streamlit
-huggingface_hub
+transformers
+torch
+librosa
+soundfile

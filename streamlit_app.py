@@ -189,14 +189,14 @@ with tab3:
     
     st.markdown("---")
     st.subheader("📊 Pipeline B WER")
-    st.markdown("- whisper-tiny: **15.19%**")
-    st.markdown("- whisper-base: **7.59%**")
-    st.markdown("- **whisper-small** (selected): **5.06%**")
+    st.markdown("- whisper-tiny: **18.18%**")
+    st.markdown("- whisper-base: **10.39%**")
+    st.markdown("- **whisper-small** (selected): **7.79%**")
     
     st.markdown("---")
     st.subheader("📊 Pipeline C")
-    st.markdown("- Test Accuracy: **88.30%**")
-    st.markdown("- F1 Macro: **89.07%**")
+    st.markdown("- Test Accuracy: **82.98%**")
+    st.markdown("- F1 Macro: **83.62%**")
     
     st.markdown("---")
     st.subheader("🔗 Resources")

@@ -195,8 +195,8 @@ with tab3:
     
     st.markdown("---")
     st.subheader("📊 Pipeline C")
-    st.markdown("- Test Accuracy: **82.98%**")
-    st.markdown("- F1 Macro: **83.62%**")
+    st.markdown("- Test Accuracy: **88.3%**")
+    st.markdown("- F1 Macro: **89.06%**")
     
     st.markdown("---")
     st.subheader("🔗 Resources")

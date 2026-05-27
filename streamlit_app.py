@@ -183,9 +183,10 @@ with tab3:
     
     st.markdown("---")
     st.subheader("📊 Pipeline A Final Performance (V2)")
-    st.markdown("- Test Accuracy: **96.97%** (V1: 95.45%)")
-    st.markdown("- F1 Macro: **97.05%** (V1: 95.48%)")
-    st.markdown("- FTC recall: 0.8750 → **0.9375** via hard negative mining")
+    st.markdown("- Test Accuracy: **93.94%** (V1: 92.42%)")
+    st.markdown("- F1 Macro: **94.02%** (V1: 92.39%)")
+    st.markdown("- 95% Bootstrap CI: Accuracy [0.8788 – 0.9848], F1 [0.8713 – 0.9857]")
+    st.markdown("- FTC recall: 0.8125 → **0.8750** via hard negative mining")
     
     st.markdown("---")
     st.subheader("📊 Pipeline B WER")
